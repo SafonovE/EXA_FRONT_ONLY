@@ -20,6 +20,7 @@
 </head>
 <body class="bg-gray-50">
 
+<!-- Оверлей загрузки -->
 <div id="loading-overlay" style="display:none; position:fixed; left:0;top:0;width:100vw;height:100vh;z-index:9999; background:rgba(32,22,67,0.21);backdrop-filter:blur(2px)">
     <div style="position:absolute;top:45%;left:50%;transform:translate(-50%,-50%);font-family:'Montserrat',monospace;font-size:1.3em;color:#522eff;text-align:center;">
         <div class="animate-bounce" style="font-size:2em;">⏳</div>
@@ -48,21 +49,53 @@
     <div id="dashboard-content"></div>
 </div>
 <script>
+// ------------------- Все переменные и подсказки для автодетекта ---------------------
 let RAW_DATA = [], RAW_HEADERS = [], RAW_FILENAME = "", RAW_ROWS = [];
 let DASHBOARD_STATE = {}, PAGE_SIZE = 20;
-
-// Автоопределение ключевых колонок по подсказкам
 const COL_HINTS = {
     date:        ["дата", "date", "incident", "время", "timestamp"],
     service:     ["сервис", "service", "система", "бизнес сервис", "application"],
     reason:      ["причина", "reason", "root", "проблема", "обоснование", "cause"],
     responsible: ["ответственный", "responsible", "виновник", "owner", "executor", "исполнитель"]
 };
+// ------------------- Универсальный парсер даты с поддержкой Excel чисел -------------------
+function parseDateAny(s) {
+    if (!s) return null;
+    // Если пришло число или строка с числом — Excel serial date
+    if (typeof s === "number" || /^\d+$/.test(s)) {
+        let num = Number(s);
+        if (num > 20000 && num < 90000) {
+            let jsDate = new Date(Date.UTC(1899, 11, 30) + num * 24 * 60 * 60 * 1000);
+            return jsDate;
+        }
+    }
+    // Обычная строка — стандартные форматы
+    let d = new Date(s);
+    if (!isNaN(d)) return d;
+    let parts = s.split(/[\.\-\/]/);
+    if (parts.length >= 3) {
+        let day = parseInt(parts[0]), month = parseInt(parts[1]), year = parseInt(parts[2]);
+        if (year < 100) year += 2000;
+        d = new Date(year, month-1, day);
+        if (!isNaN(d)) return d;
+    }
+    return null;
+}
+// ------------------- Форматирование дат для отображения -------------------
+function formatDateRu(date) {
+    if (!(date instanceof Date) || isNaN(date)) return "";
+    let d = date.getDate().toString().padStart(2, "0");
+    let m = (date.getMonth() + 1).toString().padStart(2, "0");
+    let y = date.getFullYear();
+    return `${d}.${m}.${y}`;
+}
 
+// ------------------- Оверлей загрузки -------------------
 function showLoading(show=true) {
     document.getElementById('loading-overlay').style.display = show ? '' : 'none';
 }
 
+// ------------------- Загрузка файла и автодетект колонок -------------------
 document.getElementById('upload-form').onsubmit = function(e) {
     e.preventDefault();
     const fileInput = document.getElementById('file-upload');
@@ -126,7 +159,6 @@ function autoDetectAndProcess(rows, filename) {
         askUserToSelectColumns(headers, rows, filename);
     }
 }
-
 function askUserToSelectColumns(headers, rows, filename) {
     document.getElementById('dashboard-content').innerHTML = `
         <div class="bg-white rounded-lg shadow-md p-8 max-w-xl mx-auto">
@@ -184,20 +216,7 @@ function buildDashboard(data, filename) {
     renderDashboard(data, {period: "month", service: "all", page: 1});
 }
 
-// Универсальный парсер даты
-function parseDateAny(s) {
-    if (!s) return null;
-    let d = new Date(s);
-    if (!isNaN(d)) return d;
-    let parts = s.split(/[\.\-\/]/);
-    if (parts.length >= 3) {
-        let day = parseInt(parts[0]), month = parseInt(parts[1]), year = parseInt(parts[2]);
-        if (year < 100) year += 2000;
-        d = new Date(year, month-1, day);
-        if (!isNaN(d)) return d;
-    }
-    return null;
-}
+// --------- Вспомогательные функции для агрегации и вывода ---------
 function groupByPeriod(data, period) {
     let fmt = {
         day: d => d.toISOString().slice(0,10),
@@ -265,15 +284,26 @@ function getNextPeriods(lastPeriodLabel, periodType, count) {
     }
     return result;
 }
-
-// Функция формирует реально умные рекомендации на основе анализа данных
+// --- Новая функция: находим лучшие (минимум инцидентов) дни недели ---
+function getBestDays(filtered) {
+    let byDow = {};
+    filtered.forEach(r => {
+        let d = parseDateAny(r.date);
+        if (d) {
+            let day = d.toLocaleString('ru-RU', {weekday:'long'});
+            byDow[day] = (byDow[day]||0)+1;
+        }
+    });
+    if (Object.keys(byDow).length === 0) return "Нет данных";
+    // Сортируем по возрастанию — нам нужны наименее аварийные
+    let sorted = Object.entries(byDow).sort((a,b)=>a[1]-b[1]);
+    let min = sorted[0][1];
+    let bestDays = sorted.filter(x=>x[1]===min).map(x=>x[0]);
+    return bestDays.join(", ");
+}
 function smartRecommendations(filtered, grouped, period) {
     if (!filtered.length) return [`Данных для анализа не найдено.`];
-
-    // Строю по топ причинам, сервисам, дням недели, месяцам и пикам
     let recs = [];
-
-    // 1. Всплески по времени — ищу самый пик (месяц, неделя, день — в зависимости от периода)
     let maxIdx = 0, maxVal = 0;
     grouped.counts.forEach((v, i) => { if (v > maxVal) {maxVal = v; maxIdx = i;} });
     let peakPeriod = grouped.labels[maxIdx];
@@ -292,8 +322,6 @@ function smartRecommendations(filtered, grouped, period) {
             recs.push(`Пиковый день по инцидентам: ${peakPeriod}.`);
         }
     }
-
-    // 2. Самый проблемный сервис и процент по нему
     let services = {};
     filtered.forEach(r => services[r.service] = (services[r.service]||0)+1);
     let servSorted = Object.entries(services).sort((a,b)=>b[1]-a[1]);
@@ -302,8 +330,6 @@ function smartRecommendations(filtered, grouped, period) {
         let percent = Math.round(worstCount*100/filtered.length);
         recs.push(`Сервис-лидер по числу инцидентов: <b>${worstService}</b> (${worstCount} случаев, ${percent}% от общего числа).`);
     }
-
-    // 3. Причины — топ и их % — если одна сильно доминирует, делаю совет по профилактике
     let reasons = {};
     filtered.forEach(r => reasons[r.reason] = (reasons[r.reason]||0)+1);
     let reasonSorted = Object.entries(reasons).sort((a,b)=>b[1]-a[1]);
@@ -311,7 +337,6 @@ function smartRecommendations(filtered, grouped, period) {
         let [topReason, count] = reasonSorted[0];
         let percent = Math.round(count*100/filtered.length);
         let txt = `Основная причина: <b>${topReason}</b> (${percent}% всех инцидентов).`;
-        // Добавляю hint для типовых проблем
         if (/человек|ошибк|персонал/i.test(topReason)) {
             txt += ` Проведите доп. обучение сотрудников или обновите инструкции.`;
         }
@@ -320,8 +345,6 @@ function smartRecommendations(filtered, grouped, period) {
         }
         recs.push(txt);
     }
-
-    // 4. По дням недели — может быть перекос
     let byDow = {};
     filtered.forEach(r => {
         let d = parseDateAny(r.date);
@@ -338,21 +361,17 @@ function smartRecommendations(filtered, grouped, period) {
             recs.push(`Чаще всего инциденты возникают по <b>${topDay}</b> (${percent}%). Рекомендуется усиливать контроль в этот день.`);
         }
     }
-
-    // 5. Длинные "хвосты" — если есть несколько сервисов/причин со значимым количеством, тоже отмечаю
     if (servSorted.length > 1 && servSorted[1][1] > 0.25*servSorted[0][1]) {
         recs.push(`Не только основной сервис, но и <b>${servSorted[1][0]}</b> часто даёт сбои (${servSorted[1][1]} случаев).`);
     }
     if (reasonSorted.length > 1 && reasonSorted[1][1] > 0.2*reasonSorted[0][1]) {
         recs.push(`Вторая по частоте причина: <b>${reasonSorted[1][0]}</b> (${reasonSorted[1][1]} инц.).`);
     }
-
-    // 6. Если данных мало
     if (filtered.length < 8) recs.push('Для корректной аналитики желательно больше данных.');
-
     return recs;
 }
 
+// --------- Самое важное — рендеринг всего дашборда ---------
 function renderDashboard(data, {period, service, customPeriod, groupBy, page=1}) {
     DASHBOARD_STATE = {period, service, customPeriod, groupBy, page};
     let services = Array.from(new Set(data.map(r => r.service))).sort();
@@ -424,7 +443,7 @@ function renderDashboard(data, {period, service, customPeriod, groupBy, page=1})
         });
     };
 
-    // Вся фильтрация, группировка и визуализация блоков (ниже)
+    // Вся фильтрация, группировка и визуализация блоков
     let {page: p=1} = DASHBOARD_STATE;
     let filtered = (service === "all" ? data : data.filter(r => r.service === service));
     filtered = filtered.map(r => ({ ...r, _date: parseDateAny(r.date) })).filter(r => r._date);
@@ -460,6 +479,7 @@ function renderVisualBlocks(filtered, grouped, period, page) {
 
         let forecastPeriods = getNextPeriods(chartLabels[chartLabels.length-1], period, forecast.length);
         let recommendations = smartRecommendations(filtered, grouped, period);
+        let bestDays = getBestDays(filtered);
 
         document.getElementById('viz-blocks').innerHTML = `
         <div class="bg-white rounded-lg shadow-md p-6 mb-8">
@@ -488,7 +508,7 @@ function renderVisualBlocks(filtered, grouped, period, page) {
                         ${forecast.map((val, i) => `<li class="text-base text-violet-800 font-bold">${forecastPeriods[i]}: ${val}</li>`).join('')}
                     </ul>
                     <div class="mt-1 text-gray-700">Максимальный риск: <b>${findMaxKey(serviceCount)}</b></div>
-                    <div class="text-gray-700">Рекомендуемые дни для обслуживания: <b>Авто по тренду</b></div>
+                    <div class="text-gray-700">Рекомендуемые дни для обслуживания: <b>${bestDays}</b></div>
                 </div>
             </div>
             <div class="bg-white rounded-lg shadow-md p-6">
@@ -530,7 +550,7 @@ function renderVisualBlocks(filtered, grouped, period, page) {
                     <tbody>
                         ${pageRows.map(r =>
                             `<tr class="hover:bg-gray-50">
-                                <td class="px-3 py-2 text-sm">${r.date}</td>
+                                <td class="px-3 py-2 text-sm">${formatDateRu(parseDateAny(r.date))}</td>
                                 <td class="px-3 py-2 text-sm font-bold">${r.service}</td>
                                 <td class="px-3 py-2 text-sm">${r.reason}</td>
                                 <td class="px-3 py-2 text-sm">${r.responsible}</td>
@@ -606,7 +626,7 @@ function renderVisualBlocks(filtered, grouped, period, page) {
 
         document.getElementById('export-csv').onclick = function() {
             const rows = [["Дата", "Сервис", "Причина", "Ответственный"]].concat(
-                filtered.map(r => [r.date, r.service, r.reason, r.responsible])
+                filtered.map(r => [formatDateRu(parseDateAny(r.date)), r.service, r.reason, r.responsible])
             );
             const csv = XLSX.utils.sheet_to_csv(XLSX.utils.aoa_to_sheet(rows));
             const blob = new Blob([csv], {type: "text/csv"});
@@ -615,7 +635,7 @@ function renderVisualBlocks(filtered, grouped, period, page) {
         document.getElementById('export-xlsx').onclick = function() {
             const ws = XLSX.utils.aoa_to_sheet([
                 ["Дата", "Сервис", "Причина", "Ответственный"],
-                ...filtered.map(r => [r.date, r.service, r.reason, r.responsible])
+                ...filtered.map(r => [formatDateRu(parseDateAny(r.date)), r.service, r.reason, r.responsible])
             ]);
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, "Инциденты");
@@ -630,6 +650,7 @@ function renderVisualBlocks(filtered, grouped, period, page) {
         });
     });
 }
+
 function renderPagination(current, total) {
     if (total <= 1) return "";
     let pages = [];
@@ -645,6 +666,8 @@ function renderPagination(current, total) {
         `<button class="pg-btn${p===current?" active":""}" data-page="${p}">${p}</button>`
     ).join('');
 }
+
+// --- Минималистичный прогноз на будущее ---
 async function forecastNeural(series, futureCount) {
     if(series.length < 6) return Array(futureCount).fill(series[series.length-1]||0);
     let min = Math.min(...series), max = Math.max(...series);
