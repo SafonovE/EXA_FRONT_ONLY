@@ -3,24 +3,34 @@
 <head>
     <meta charset="UTF-8">
     <title>Интерактивный Дашборд Инцидентов</title>
+    <!-- Tailwind CSS — быстрый корпоративный стиль -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js — построение графиков -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- SheetJS + FileSaver — для экспорта Excel/CSV -->
     <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+    <!-- TensorFlow.js — простой ИИ-прогноз -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
+        /* Стилизация всех ключевых блоков (делал с упором на читаемость) */
         .segabtn { font-family: 'Montserrat', 'Arial', sans-serif; font-size: 1em; padding: 10px 22px; border: 2.5px solid #0ff; background: #172550; color: #fff; border-radius: 12px; margin: 0 8px 10px 0; box-shadow: 0 2px 0 #00d0ff, 0 0 6px #00eaff70; cursor: pointer; transition: background 0.13s, box-shadow 0.10s, transform 0.13s; outline: none; min-width: 105px; min-height: 38px; display: inline-block;}
         .segabtn.active, .segabtn:focus { background: #ffe169; border-color: #ffd500; color: #1c1a1f; box-shadow: 0 0 0 3px #ffe16977, 0 8px 22px #ffe16955; transform: scale(1.05); z-index: 2;}
         .segabtn:hover:not(.active) { background: #1bd8fd; color: #192f6e; border-color: #0ff; box-shadow: 0 0 12px #0ff, 0 2px 8px #1ae6ff; transform: translateY(-2px) scale(1.03);}
         .pg-btn { padding: 6px 14px; border-radius: 6px; margin: 0 2px; border:1px solid #e0e0f0; background: #f8fafc; cursor:pointer;}
         .pg-btn.active { background: #6366f1; color:#fff; border-color:#6366f1; font-weight:bold;}
         .pg-btn:disabled { background: #ececec; color: #b5b5b5; cursor: default;}
+        .info-tip { display: inline-block; background: #f1f5f9; color: #6366f1; border-radius: 50%; border: 1.5px solid #6366f1; font-size: 1.04em; font-weight: bold; width: 1.33em; height: 1.33em; text-align: center; cursor: pointer; margin-left: 8px; line-height: 1.22em; transition: background 0.2s; position: relative;}
+        .info-tip:hover { background: #6366f1; color: #fff;}
+        .info-tip[data-tooltip]:hover:after { content: attr(data-tooltip); position: absolute; left: 115%; top: 45%; transform: translateY(-50%); background: #fff; color: #222; padding: 7px 12px; border-radius: 7px; min-width: 160px; max-width: 350px; box-shadow: 0 2px 16px #acb6d633; font-size: 13px; z-index: 10; white-space: pre-line;}
+        .reasons-list { margin-top: 10px; margin-bottom: 12px; padding-left: 0;}
+        .reasons-list li { background: #f7f7fa; border-left: 4px solid #818cf8; border-radius: 8px; margin-bottom: 8px; padding: 10px 16px; font-size: 1.08em; font-weight: 500; color: #4338ca; line-height: 1.5; word-break: break-word; list-style: none;}
     </style>
 </head>
 <body class="bg-gray-50">
 
-<!-- Оверлей загрузки -->
+<!-- Оверлей загрузки — чтобы пользователь видел процесс -->
 <div id="loading-overlay" style="display:none; position:fixed; left:0;top:0;width:100vw;height:100vh;z-index:9999; background:rgba(32,22,67,0.21);backdrop-filter:blur(2px)">
     <div style="position:absolute;top:45%;left:50%;transform:translate(-50%,-50%);font-family:'Montserrat',monospace;font-size:1.3em;color:#522eff;text-align:center;">
         <div class="animate-bounce" style="font-size:2em;">⏳</div>
@@ -33,6 +43,7 @@
         <h1 class="text-3xl font-bold text-gray-800 mb-1">Интерактивный Дашборд Инцидентов</h1>
         <p class="text-gray-600">Аналитика IT инцидентов сервисов БКС «Мир инвестиций»</p>
     </div>
+    <!-- Форма для загрузки файла -->
     <div class="bg-white rounded-lg shadow-md p-6 mb-8">
         <h2 class="text-xl font-semibold text-gray-800 mb-2">Загрузите файл с данными</h2>
         <form id="upload-form" class="mb-3">
@@ -49,19 +60,20 @@
     <div id="dashboard-content"></div>
 </div>
 <script>
-// ------------------- Все переменные и подсказки для автодетекта ---------------------
-let RAW_DATA = [], RAW_HEADERS = [], RAW_FILENAME = "", RAW_ROWS = [];
-let DASHBOARD_STATE = {}, PAGE_SIZE = 20;
+// --- Список синонимов для автоопределения колонок (чётко и минимально, чтобы не было ложных совпадений) ---
 const COL_HINTS = {
     date:        ["дата", "date", "incident", "время", "timestamp"],
     service:     ["сервис", "service", "система", "бизнес сервис", "application"],
     reason:      ["причина", "reason", "root", "проблема", "обоснование", "cause"],
     responsible: ["ответственный", "responsible", "виновник", "owner", "executor", "исполнитель"]
 };
-// ------------------- Универсальный парсер даты с поддержкой Excel чисел -------------------
+// Глобальные переменные для хранения данных и состояния фильтров
+let RAW_DATA = [], RAW_HEADERS = [], RAW_FILENAME = "", RAW_ROWS = [];
+let DASHBOARD_STATE = {}, PAGE_SIZE = 20;
+
+// Универсальный парсер даты (Excel, ISO, DD.MM.YYYY и др.)
 function parseDateAny(s) {
     if (!s) return null;
-    // Если пришло число или строка с числом — Excel serial date
     if (typeof s === "number" || /^\d+$/.test(s)) {
         let num = Number(s);
         if (num > 20000 && num < 90000) {
@@ -69,7 +81,6 @@ function parseDateAny(s) {
             return jsDate;
         }
     }
-    // Обычная строка — стандартные форматы
     let d = new Date(s);
     if (!isNaN(d)) return d;
     let parts = s.split(/[\.\-\/]/);
@@ -81,7 +92,7 @@ function parseDateAny(s) {
     }
     return null;
 }
-// ------------------- Форматирование дат для отображения -------------------
+// Форматирование даты для отображения в стиле ДД.ММ.ГГГГ
 function formatDateRu(date) {
     if (!(date instanceof Date) || isNaN(date)) return "";
     let d = date.getDate().toString().padStart(2, "0");
@@ -89,20 +100,18 @@ function formatDateRu(date) {
     let y = date.getFullYear();
     return `${d}.${m}.${y}`;
 }
-
-// ------------------- Оверлей загрузки -------------------
+// Показывать/скрывать оверлей загрузки
 function showLoading(show=true) {
     document.getElementById('loading-overlay').style.display = show ? '' : 'none';
 }
 
-// ------------------- Загрузка файла и автодетект колонок -------------------
+// ===== Загрузка файла и автоопределение структуры =====
 document.getElementById('upload-form').onsubmit = function(e) {
     e.preventDefault();
     const fileInput = document.getElementById('file-upload');
     if (!fileInput.files.length) return alert('Сначала выберите файл!');
     const file = fileInput.files[0];
     showLoading(true);
-
     const reader = new FileReader();
     reader.onload = function(evt) {
         try {
@@ -126,13 +135,14 @@ document.getElementById('upload-form').onsubmit = function(e) {
     reader.readAsBinaryString(file);
 };
 
+// ===== Классический автоопределитель колонок (ищет точное совпадение по синонимам) =====
 function autoDetectAndProcess(rows, filename) {
     showLoading(false);
     const headers = rows[0].map(h => (h+"").trim().toLowerCase());
     function findColIndex(hints) {
         for (let i = 0; i < headers.length; i++) {
             for (const word of hints) {
-                if (headers[i].includes(word)) return i;
+                if (headers[i] && headers[i].trim() === word) return i;
             }
         }
         return -1;
@@ -143,6 +153,7 @@ function autoDetectAndProcess(rows, filename) {
         reason: findColIndex(COL_HINTS.reason),
         responsible: findColIndex(COL_HINTS.responsible)
     };
+    // Если удалось найти все ключевые столбцы — строим дашборд
     if (Object.values(colIdx).every(idx => idx !== -1)) {
         const data = rows.slice(1)
             .filter(r => r.length > 1 && r.some(cell => cell && cell.toString().trim() !== ""))
@@ -156,9 +167,11 @@ function autoDetectAndProcess(rows, filename) {
         RAW_HEADERS = headers;
         buildDashboard(data, filename);
     } else {
+        // Если не нашли — даём пользователю выбрать руками
         askUserToSelectColumns(headers, rows, filename);
     }
 }
+// ======= Ручной выбор колонок пользователем (если авто не сработало) =======
 function askUserToSelectColumns(headers, rows, filename) {
     document.getElementById('dashboard-content').innerHTML = `
         <div class="bg-white rounded-lg shadow-md p-8 max-w-xl mx-auto">
@@ -209,20 +222,19 @@ function askUserToSelectColumns(headers, rows, filename) {
         buildDashboard(data, filename);
     };
 }
-
+// =================== Строим дашборд ===================
 function buildDashboard(data, filename) {
     document.getElementById('file-info').innerText = `✔️ Файл: ${filename}, строк: ${data.length}`;
     document.getElementById('file-info').classList.remove('hidden');
     renderDashboard(data, {period: "month", service: "all", page: 1});
 }
-
-// --------- Вспомогательные функции для агрегации и вывода ---------
+// ========== Вспомогательные функции для аналитики, группировки и прогноза ==========
 function groupByPeriod(data, period) {
     let fmt = {
         day: d => d.toISOString().slice(0,10),
         week: d => `${d.getFullYear()}-W${Math.ceil((d.getDate() + 6 - d.getDay())/7)}`,
         month: d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`,
-        quarter: d => `${d.getFullYear()}-Q${Math.floor(d.getMonth()/3)+1}`,
+        quarter: d => `${d.getFullYear()}-Q${Math.floor((d.getMonth()/3)+1)}`,
         year: d => d.getFullYear()+""
     }[period] || (d => d.toISOString().slice(0,10));
     let map = {};
@@ -284,7 +296,6 @@ function getNextPeriods(lastPeriodLabel, periodType, count) {
     }
     return result;
 }
-// --- Новая функция: находим лучшие (минимум инцидентов) дни недели ---
 function getBestDays(filtered) {
     let byDow = {};
     filtered.forEach(r => {
@@ -295,14 +306,14 @@ function getBestDays(filtered) {
         }
     });
     if (Object.keys(byDow).length === 0) return "Нет данных";
-    // Сортируем по возрастанию — нам нужны наименее аварийные
     let sorted = Object.entries(byDow).sort((a,b)=>a[1]-b[1]);
     let min = sorted[0][1];
     let bestDays = sorted.filter(x=>x[1]===min).map(x=>x[0]);
     return bestDays.join(", ");
 }
+// --- Максимально умные и развернутые рекомендации, на случай любых данных ---
 function smartRecommendations(filtered, grouped, period) {
-    if (!filtered.length) return [`Данных для анализа не найдено.`];
+    if (!filtered.length) return [`Данных для анализа не найдено. Загрузите больше строк для осмысленного анализа. Лучше, если будет не менее 15-20 инцидентов за период — так выводы будут валиднее.`];
     let recs = [];
     let maxIdx = 0, maxVal = 0;
     grouped.counts.forEach((v, i) => { if (v > maxVal) {maxVal = v; maxIdx = i;} });
@@ -311,15 +322,15 @@ function smartRecommendations(filtered, grouped, period) {
         if (period === "month") {
             let dt = new Date(peakPeriod + "-01");
             let ruMonth = dt.toLocaleString('ru-RU', {month:'long', year:'numeric'});
-            recs.push(`Внимание: Пик инцидентов пришёлся на ${ruMonth}.`);
+            recs.push(`⚡ Пик инцидентов: <b>${ruMonth}</b>. Проверьте, что происходило в этот месяц. Возможно, требуется дополнительное расследование.`);
         } else if (period === "week") {
-            recs.push(`Внимание: Больше всего инцидентов было в неделю ${peakPeriod}.`);
+            recs.push(`⚡ Больше всего инцидентов за неделю: <b>${peakPeriod}</b>.`);
         } else if (period === "quarter") {
-            recs.push(`Пик инцидентов — ${peakPeriod.replace('-Q',' квартал ')}.`);
+            recs.push(`⚡ Пик инцидентов — <b>${peakPeriod.replace('-Q',' квартал ')}</b>.`);
         } else if (period === "year") {
-            recs.push(`Больше всего инцидентов зафиксировано в ${peakPeriod} году.`);
+            recs.push(`⚡ Максимум инцидентов — <b>${peakPeriod} год</b>.`);
         } else if (period === "day") {
-            recs.push(`Пиковый день по инцидентам: ${peakPeriod}.`);
+            recs.push(`⚡ Пиковый день: <b>${peakPeriod}</b>.`);
         }
     }
     let services = {};
@@ -328,7 +339,11 @@ function smartRecommendations(filtered, grouped, period) {
     if (servSorted.length) {
         let [worstService, worstCount] = servSorted[0];
         let percent = Math.round(worstCount*100/filtered.length);
-        recs.push(`Сервис-лидер по числу инцидентов: <b>${worstService}</b> (${worstCount} случаев, ${percent}% от общего числа).`);
+        recs.push(`Сервис-лидер по числу инцидентов: <b>${worstService}</b> (${worstCount} случаев, ${percent}% от всех).`);
+        if (servSorted.length > 1) {
+            let unique = servSorted.filter(x=>x[1]===1).map(x=>x[0]);
+            if (unique.length) recs.push(`Также есть уникальные сервисы с единичными инцидентами: ${unique.join(", ")} — проверьте их на нестандартные сбои.`);
+        }
     }
     let reasons = {};
     filtered.forEach(r => reasons[r.reason] = (reasons[r.reason]||0)+1);
@@ -336,7 +351,7 @@ function smartRecommendations(filtered, grouped, period) {
     if (reasonSorted.length) {
         let [topReason, count] = reasonSorted[0];
         let percent = Math.round(count*100/filtered.length);
-        let txt = `Основная причина: <b>${topReason}</b> (${percent}% всех инцидентов).`;
+        let txt = `Самая частая причина: <b>${topReason}</b> (${percent}% всех инцидентов).`;
         if (/человек|ошибк|персонал/i.test(topReason)) {
             txt += ` Проведите доп. обучение сотрудников или обновите инструкции.`;
         }
@@ -344,6 +359,10 @@ function smartRecommendations(filtered, grouped, period) {
             txt += ` Проверьте инфраструктуру и планируйте профилактику.`;
         }
         recs.push(txt);
+        if (reasonSorted.length > 3) {
+            let rare = reasonSorted.slice(-3).filter(x=>x[1]===1).map(x=>x[0]);
+            recs.push(`Причин много и они разнообразны. Для снижения количества инцидентов стоит провести комплексный анализ. ${rare.length ? 'Есть уникальные причины: ' + rare.join(", "): ""}`);
+        }
     }
     let byDow = {};
     filtered.forEach(r => {
@@ -358,20 +377,13 @@ function smartRecommendations(filtered, grouped, period) {
         let [topDay, topDayCount] = dowSorted[0];
         let percent = Math.round(topDayCount*100/filtered.length);
         if (percent >= 30) {
-            recs.push(`Чаще всего инциденты возникают по <b>${topDay}</b> (${percent}%). Рекомендуется усиливать контроль в этот день.`);
+            recs.push(`Чаще всего инциденты возникают по <b>${topDay}</b> (${percent}%). Усильте контроль в этот день.`);
         }
     }
-    if (servSorted.length > 1 && servSorted[1][1] > 0.25*servSorted[0][1]) {
-        recs.push(`Не только основной сервис, но и <b>${servSorted[1][0]}</b> часто даёт сбои (${servSorted[1][1]} случаев).`);
-    }
-    if (reasonSorted.length > 1 && reasonSorted[1][1] > 0.2*reasonSorted[0][1]) {
-        recs.push(`Вторая по частоте причина: <b>${reasonSorted[1][0]}</b> (${reasonSorted[1][1]} инц.).`);
-    }
-    if (filtered.length < 8) recs.push('Для корректной аналитики желательно больше данных.');
+    if (filtered.length < 8) recs.push('Для корректной аналитики желательно больше данных. Привлеките коллег и автоматизируйте сбор данных, чтобы построить действительно валидную аналитику.');
     return recs;
 }
-
-// --------- Самое важное — рендеринг всего дашборда ---------
+// ======= Основной рендеринг дашборда, графиков, топ-5, таблицы, экспорта и т.д. =======
 function renderDashboard(data, {period, service, customPeriod, groupBy, page=1}) {
     DASHBOARD_STATE = {period, service, customPeriod, groupBy, page};
     let services = Array.from(new Set(data.map(r => r.service))).sort();
@@ -413,7 +425,6 @@ function renderDashboard(data, {period, service, customPeriod, groupBy, page=1})
     <div id="viz-blocks"></div>
     `;
     document.getElementById('dashboard-content').innerHTML = html;
-
     document.querySelectorAll('.segabtn[data-period]').forEach(btn => {
         btn.onclick = function() {
             document.querySelectorAll('.segabtn').forEach(b=>b.classList.remove('active'));
@@ -442,8 +453,6 @@ function renderDashboard(data, {period, service, customPeriod, groupBy, page=1})
             period: newPeriod, service: newService, customPeriod, groupBy, page: 1
         });
     };
-
-    // Вся фильтрация, группировка и визуализация блоков
     let {page: p=1} = DASHBOARD_STATE;
     let filtered = (service === "all" ? data : data.filter(r => r.service === service));
     filtered = filtered.map(r => ({ ...r, _date: parseDateAny(r.date) })).filter(r => r._date);
@@ -457,7 +466,7 @@ function renderDashboard(data, {period, service, customPeriod, groupBy, page=1})
     let grouped = groupByPeriod(filtered, group);
     renderVisualBlocks(filtered, grouped, group, p);
 }
-
+// ======= Визуальные блоки (графики, топ-5, таблица, прогноз, рекомендации и т.д.) =======
 function renderVisualBlocks(filtered, grouped, period, page) {
     let chartLabels = grouped.labels;
     let chartCounts = grouped.counts;
@@ -476,32 +485,42 @@ function renderVisualBlocks(filtered, grouped, period, page) {
         let pageSafe = Math.min(page, totalPages)||1;
         let start = (pageSafe-1)*PAGE_SIZE, end = start + PAGE_SIZE;
         let pageRows = filtered.slice(start, end);
-
         let forecastPeriods = getNextPeriods(chartLabels[chartLabels.length-1], period, forecast.length);
         let recommendations = smartRecommendations(filtered, grouped, period);
         let bestDays = getBestDays(filtered);
 
         document.getElementById('viz-blocks').innerHTML = `
+        <!-- Блок графика динамики -->
         <div class="bg-white rounded-lg shadow-md p-6 mb-8">
             <div class="flex justify-between items-center mb-2">
                 <h2 class="text-2xl font-semibold text-gray-800">Динамика инцидентов</h2>
-                <span class="text-gray-400 cursor-pointer" title="Синяя линия — история, оранжевая — прогноз">i</span>
+                <span class="info-tip" data-tooltip="История количества инцидентов по выбранному периоду. Синяя линия — история, оранжевая — прогноз.">i</span>
             </div>
             <canvas id="incidents-chart" height="110"></canvas>
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-6 mb-8">
             <div class="bg-white rounded-lg shadow-md p-6">
-                <h3 class="text-xl font-semibold mb-2">Распределение по сервисам</h3>
+                <h3 class="text-xl font-semibold mb-2 flex items-center">Распределение по сервисам
+                  <span class="info-tip" data-tooltip="Диаграмма по сервисам — чем больше сектор, тем больше инцидентов.">i</span>
+                </h3>
                 <canvas id="services-pie" height="160"></canvas>
             </div>
             <div class="bg-white rounded-lg shadow-md p-6">
-                <h3 class="text-xl font-semibold mb-2">Топ-5 причин инцидентов</h3>
-                <canvas id="reasons-bar" height="160"></canvas>
+                <h3 class="text-xl font-semibold mb-2 flex items-center">Топ-5 причин инцидентов
+                  <span class="info-tip" data-tooltip="Все причины показаны списком, текст отображается полностью — удобно для анализа и чтения.">i</span>
+                </h3>
+                <ul class="reasons-list">
+                    ${reasonsSorted.map(x =>
+                        `<li>${x[0]} <span style="color:#9ca3af;font-weight:normal;">(${x[1]} инц.)</span></li>`
+                    ).join('')}
+                </ul>
             </div>
         </div>
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
             <div class="bg-white rounded-lg shadow-md p-6">
-                <h3 class="font-semibold mb-2 text-lg">Прогноз</h3>
+                <h3 class="font-semibold mb-2 text-lg flex items-center">Прогноз
+                  <span class="info-tip" data-tooltip="Прогноз количества инцидентов на несколько будущих периодов — нейросеть.">i</span>
+                </h3>
                 <div>
                     <span class="font-semibold text-indigo-800 text-lg">Прогноз на ${forecastPeriods.length} периода:</span>
                     <ul class="mt-2 mb-3">
@@ -512,31 +531,36 @@ function renderVisualBlocks(filtered, grouped, period, page) {
                 </div>
             </div>
             <div class="bg-white rounded-lg shadow-md p-6">
-                <h3 class="font-semibold mb-2 text-lg">Ответственные</h3>
+                <h3 class="font-semibold mb-2 text-lg flex items-center">Ответственные
+                  <span class="info-tip" data-tooltip="Топ-8 ответственных за инциденты и количество по каждому.">i</span>
+                </h3>
+                <div class="mb-2 text-sm text-gray-500">Всего инцидентов: <b>${filtered.length}</b></div>
                 <ul>
                     ${responsiblesSorted.map(r =>
-                        `<li class="mb-1"><span class="text-indigo-700 font-semibold">${r[0]}:</span> <b>${r[1]} инц.</b></li>`
+                        `<li class="mb-1"><span class="text-indigo-700 font-semibold">${r[0]}</span>: <b>${r[1]} инц.</b></li>`
                     ).join('')}
                 </ul>
             </div>
             <div class="bg-white rounded-lg shadow-md p-6">
-                <h3 class="font-semibold mb-2 text-lg">Рекомендации</h3>
+                <h3 class="font-semibold mb-2 text-lg flex items-center">Рекомендации
+                  <span class="info-tip" data-tooltip="Максимально умные советы: учитываются все особенности данных, пики, разнообразие причин и сервисов.">i</span>
+                </h3>
                 <ul>
                     ${recommendations.map(txt => `<li class="mb-2 text-base" style="margin-left:0.5em;">${txt}</li>`).join('')}
                 </ul>
             </div>
         </div>
+        <!-- Таблица всех данных -->
         <div class="bg-white rounded-lg shadow-md p-6 mb-8">
             <div class="flex justify-between items-center mb-2">
                 <h2 class="text-xl font-semibold text-gray-800">Детализированные данные</h2>
+                <span class="info-tip" data-tooltip="Все инциденты из фильтра. Навигация по страницам — ниже.">i</span>
                 <div>
                     <button id="export-csv" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 mr-2" title="Экспорт данных в CSV">Экспорт в CSV</button>
                     <button id="export-xlsx" class="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700" title="Экспорт данных в Excel">Экспорт в Excel</button>
                 </div>
             </div>
-            <div class="text-sm text-gray-500 mb-2">
-                Все инциденты из фильтра. Навигация по страницам — ниже.
-            </div>
+            <div class="text-sm text-gray-500 mb-2">Все инциденты из фильтра. Навигация по страницам — ниже.</div>
             <div class="overflow-x-auto">
                 <table class="min-w-full divide-y divide-gray-200" id="result-table">
                     <thead>
@@ -563,7 +587,6 @@ function renderVisualBlocks(filtered, grouped, period, page) {
             <div class="text-right text-xs text-gray-500 mt-2">Строк: ${filtered.length}, страница ${pageSafe} из ${totalPages}</div>
         </div>
         `;
-
         setTimeout(()=>{
             let allLabels = [...chartLabels, ...forecastPeriods];
             let mainData = [...chartCounts, ...Array(forecast.length).fill(null)];
@@ -615,15 +638,7 @@ function renderVisualBlocks(filtered, grouped, period, page) {
                     datasets: [{ data: Object.values(serviceCount), backgroundColor: ['#6366f1', '#818cf8', '#a5b4fc', '#c7d2fe', '#e0e7ff'] }]
                 }
             });
-            new Chart(document.getElementById('reasons-bar').getContext('2d'), {
-                type: 'bar',
-                data: {
-                    labels: reasonsSorted.map(x=>x[0]),
-                    datasets: [{ label: 'Количество инцидентов', data: reasonsSorted.map(x=>x[1]), backgroundColor: '#818cf8' }]
-                }
-            });
         }, 250);
-
         document.getElementById('export-csv').onclick = function() {
             const rows = [["Дата", "Сервис", "Причина", "Ответственный"]].concat(
                 filtered.map(r => [formatDateRu(parseDateAny(r.date)), r.service, r.reason, r.responsible])
@@ -650,7 +665,6 @@ function renderVisualBlocks(filtered, grouped, period, page) {
         });
     });
 }
-
 function renderPagination(current, total) {
     if (total <= 1) return "";
     let pages = [];
@@ -666,8 +680,7 @@ function renderPagination(current, total) {
         `<button class="pg-btn${p===current?" active":""}" data-page="${p}">${p}</button>`
     ).join('');
 }
-
-// --- Минималистичный прогноз на будущее ---
+// ========== Нейросетевой прогноз (простая RNN) ==========
 async function forecastNeural(series, futureCount) {
     if(series.length < 6) return Array(futureCount).fill(series[series.length-1]||0);
     let min = Math.min(...series), max = Math.max(...series);
